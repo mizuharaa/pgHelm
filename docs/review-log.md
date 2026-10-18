@@ -337,3 +337,67 @@ R2-N5 accepted: tests sharing a fixture DB run sequentially, use queue-specific 
   ]
 }
 ```
+
+## 2026-10-18 - Claude round 3: APPROVED (design only)
+
+Result: `C:\Users\Khang\tmp\pghelm-claudex-review-3\claudex-_m_er8js\result.json`. Completed, exit 0; observed model `claude-opus-5-5`; same reviewer session. Reviewed commit `21a9481`. Authoritative reviewed plan SHA256: `fd07fd7b587ed46cc60179ffb0b04b3775cfc8d0dffa9fd9a545f8ffc0157311`.
+
+All ten round-1 and five round-2 findings are closed. No unresolved material design defect reported. Three low-priority clarifications are accepted as mandatory inputs to the Slice 2 plan, not runtime-verified fixes:
+
+- R3-N1: identify recurring poison batches by stable tick window or source-event set, not newly allocated batch_id. Test three rollbacks with changing batch IDs and stable halt key. The reviewer corrected its own round-1 suggestion.
+- R3-N2: confirm an explicit expected-conversion SQLSTATE allowlist on PG17, including malformed JSON/Unicode, numeric range and deep nesting. Timeouts, serialization/deadlock, resource exhaustion and connection errors roll back the entire batch; never quarantine merely because infrastructure failed.
+- R3-N3: validation savepoints contain only casts/comparisons/lookups. Release or roll back and release each savepoint before top-level receipt/job INSERTs; verify no subtransaction overflow at maximum batch size.
+
+Rounds used: 3 of 5. Source audit and Standards/Spec reviews were independent read-only Codex agents in separate worktrees; final architecture review was Claude. No application build occurred, so no implementation inspection or runtime-test approval is claimed. The reviewed plan file remains unchanged after approval; only this evidence log is appended. Plan approval is bound to the QA worktree path/hash. A later implementation must validate approval in its chosen build checkout; user permission for Slice 1 is still required.
+
+### Full Claude round 3 response
+
+```json
+{
+  "verdict": "APPROVED",
+  "summary": "Round-2 findings R2-N1 through R2-N5 are all closed.\n- **R2-N1:** Section C now defines envelope equality as PostgreSQL jsonb equality over the original text bound as `$n::jsonb`, and forbids storing or comparing a JS reserialization. Expected conversion errors are caught by per-event savepoints, and the tests cover differences beyond 2^53 and key-order/whitespace equivalence.\n- **R2-N2:** review-log.md lines 175 and 179 now record 64-hex plan hashes for round 2 (`82d74599\u2026`) and round 1 (`\u20260c3c97d`). The old 65-character value is explicitly kept as superseded history, which fits an append-only log.\n- **R2-N3:** the corrected round-1 copy and the new round-2 copy are ASCII-escaped JSON with no mojibake. The 14 non-ASCII lines that remain are the superseded historical copy.\n- **R2-N4:** Section F separates the checkout-dependent hash from the canonical one, and Section I adds a byte-preserving Python subprocess hash. Section K plans `vendor/pgque/pgque.sql -text` in .gitattributes. The three pins and Section I's expected value are each 64 hex characters.\n- **R2-N5:** tests that share a fixture database are explicitly sequential and use per-queue `ticker(queue_name)`.\n\nRound-1 F1\u2013F10 stay closed. F3's EvalPlanQual behavior is still unverified, by design, until S1-08.\n\nThe corrections introduced no material defects. I found three low-severity gaps in the new poison-batch and savepoint text, all one-sentence clarifications.\n- **Batch identity:** the halt after three same-batch failures should be keyed by tick window, not batch_id. My own round-1 fix suggested batch_id, which was wrong: PgQue assigns a new batch_id on every rolled-back retry.\n- **Expected errors:** the set of conversion errors that quarantine needs to be stated explicitly.\n- **Read-only savepoints:** savepoints should do no writes, to avoid subtransaction overflow.\n\nNone of these affects the architectural decision, so approval does not need another round. They can go into the Slice 2 plan.\n\nAll runtime properties remain UNVERIFIED, as the plan states. This approval covers the design only and does not authorize Slice 1. That decision is the user's.",
+  "findings": [
+    {
+      "id": "R3-N1-same-batch-key-not-batch-id",
+      "severity": "low",
+      "path": "docs/slice-0.md",
+      "evidence": "Section C says 'after three consecutive same-batch failures stop polling that pipeline'. A rolled-back dispatch never retries under the same batch_id: next_batch_custom allocates `batch_id := nextval('pgque.batch_id_seq')` (pgque.sql:5863), sequences are non-transactional, and the `sub_batch` UPDATE (5871\u20135879) is rolled back. Every retry of the same poison tick window therefore gets a new batch_id. If 'same batch' means batch_id (which my round-1 F4 fix wrongly suggested), the counter never reaches three. The pipeline then fails and backs off indefinitely without the intended halt. The window itself is stable: the next tick after `sub_last_tick` is chosen deterministically (5807\u20135824).",
+      "fix": "Define batch identity as the tick window `(prev_tick_id, tick_id)` from `pgque.get_batch_info(batch_id)` (pgque.sql:2790\u20132840, granted to pgque_reader at 4770), read in the same transaction before rollback, or as a fingerprint of the received msg_id set. Use the same key to report the 54000 oversize stall. Add a Slice 2 test where a forced failure repeats three times and the halt fires despite three different batch_ids."
+    },
+    {
+      "id": "R3-N2-expected-conversion-sqlstates-unspecified",
+      "severity": "low",
+      "path": "docs/slice-0.md",
+      "evidence": "Section C: 'roll back that savepoint for expected input conversion errors (including unrepresentable strings and out-of-range numerics)\u2026 Unexpected DB failures still roll back the complete batch' and count toward the halt. Which errors count as expected is never listed. One example is deeply nested JSON: within the payload size bound, the jsonb parser raises stack-depth errors (SQLSTATE 54001) rather than 22P02. If 54001 is not on the allowlist, one trusted producer's legal-sized event halts the whole pipeline instead of being quarantined. A list that is too broad (for example, all class-22/54 codes, or 57014 statement timeout) would quarantine events because of transient database conditions.",
+      "fix": "In Slice 2, state an explicit SQLSTATE allowlist for the savepoint, for example 22P02, 22P05, 22003 and 54001 (confirm against PG17 when running). Keep 57014, 40001/40P01, 53xxx and connection errors as whole-batch rollbacks. Add a deep-nesting case to the listed tests."
+    },
+    {
+      "id": "R3-N3-savepoints-should-stay-read-only",
+      "severity": "low",
+      "path": "docs/slice-0.md",
+      "evidence": "Section C adds 'a per-event savepoint around raw text-to-jsonb validation/comparison', then inserts the quarantine receipt. If any write (a job or receipt INSERT) runs inside a per-event savepoint, each such subtransaction is assigned an XID. A batch of more than 64 written subtransactions overflows the per-backend subxid cache (PGPROC_MAX_CACHED_SUBXIDS = 64), and while the transaction is open, other sessions' snapshots must check pg_subtrans. This is a well-known PostgreSQL performance cliff that a batch ceiling in the hundreds would hit on every dispatch. Read-only savepoints do not get an XID.",
+      "fix": "State that per-event savepoints contain only read-only casts, comparisons and lookups. Run all INSERTs (job, accepted, duplicate or quarantine receipts) at the top level after RELEASE or ROLLBACK TO. In Slice 2, assert with pg_stat_activity/pg_stat_get_backend_subxact (PG16+) that subxact_overflowed stays false for a maximum-size batch."
+    }
+  ],
+  "coverage": [
+    "Read the revised plan in full (as supplied, SHA256 fd07fd7b\u2026) and checked every R2-N1..N5 disposition against the new text in Sections C, D (`job` row), F, I and K.",
+    "Read docs/review-log.md lines 170\u2013340: the round-2 disposition section, the corrected round-1 archive and the round-2 archive. Regex confirmed the authoritative plan hashes on lines 175/179 are 64 hex characters. Non-ASCII content is limited to the superseded historical copy.",
+    "Regex confirmed that all digests in slice-0.md (lines 17, 18, 325) are 64 hex characters, and that Section I's expected canonical value matches the pin-table value.",
+    "Re-inspected the pinned pgque.sql: batch_id allocation and the sub_batch update in next_batch_custom (5807\u20135879), get_batch_info output and grants (2790\u20132840, 4770). These are the basis for R3-N1.",
+    "Checked that round-1 F1\u2013F10 closures still hold in this revision (gate, CACHE 1, NO KEY UPDATE, SKIP LOCKED, pgque_admin trust, same-client install, S1-08/09/10)."
+  ],
+  "limitations": [
+    "I could not run commands. I did not recompute the canonical or CRLF installer hashes or the image digest, run the Section I Python command, or open the coordinator's raw evidence or result.json files. Hash checks are format and consistency only.",
+    "The jsonb equality, savepoint, SQLSTATE and subtransaction-overflow points come from PostgreSQL semantics and were not run on PG17. F3's EvalPlanQual behavior remains untested until S1-08.",
+    "I did not compare the archived JSON byte for byte against the original result.json files. I relied on the coordinator's stated exact-equality assertion plus visual inspection.",
+    "No code, schema or tests exist; this is a design and spec review only."
+  ]
+}
+```
+
+### Final artifact verification
+
+Executed Python stdin assertions confirmed: result is APPROVED with exit 0; reviewed SHA256 is 64 hex characters and matches actual QA-worktree bytes; main and QA Git blobs of docs/slice-0.md are identical. Earlier structure checks confirmed Markdown-only tracked files, A-K sections, ten Slice 1 gates, balanced code fences and resolving local links. Source/image digests were checked against actual Git blob/checkout bytes and registry output. These are documentation/provenance checks, not PostgreSQL tests.
+
+Git push of documentation through 21a9481 exited 0; GitHub API returned 21a9481cc854c8dafd0c21c62fbd394f1e2ad3ca. Final review-log commit and push are verified in the host handoff. No typecheck, lint, integration, chaos, or benchmark result exists in this slice.
+Claudex runner check --host codex --repo C:\Users\Khang\pw\pghelm-claude-qa --plan docs/slice-0.md --approval C:\Users\Khang\tmp\pghelm-claudex-review-3\claudex-_m_er8js\result.json: exit 0, observed: Approval matches the current plan. Final document assertions also exited 0.

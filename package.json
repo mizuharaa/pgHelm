@@ -1,0 +1,29 @@
+{
+  "name": "pghelm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.15.9",
+  "engines": { "node": "24.x" },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "db:migrate": "pnpm build && node --env-file-if-exists=.env dist/cli.js migrate",
+    "ticker": "pnpm build && node --env-file-if-exists=.env dist/cli.js ticker",
+    "smoke": "pnpm build && node --env-file-if-exists=.env dist/cli.js smoke"
+  },
+  "dependencies": { "pg": "8.23.1", "pino": "10.4.0", "zod": "4.6.7" },
+  "devDependencies": {
+    "@testcontainers/postgresql": "12.2.1",
+    "@types/node": "24.10.1",
+    "@types/pg": "8.23.1",
+    "eslint": "9.39.2",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.71.2",
+    "vitest": "4.0.18"
+  }
+}

@@ -575,3 +575,67 @@ Raw result: `C:\Users\Khang\tmp\pghelm-slice1-plan-review-3\claudex-rnemoxnd\res
 ```
 
 The low queue-name ceiling observation was reproduced with a failing unit regression and fixed to57 ASCII bytes. Independent Codex QA closed its payload-log finding by inspection after the fixed error/replay test, and reported no remaining findings. Codex QA did not execute the application suite; primary and implementation lanes own the runtime evidence. Fresh Claude code inspection remains required.
+
+
+## Slice 1 fresh code inspection ? APPROVED
+
+Inspected `8326969..da7968d` in isolated `pghelm-claude-qa`; source was frozen during inspection. Codex authored code and tests; fresh Claude session `dc8cf902-9795-4481-8e1a-78f8d16fcc97`, observed claude-opus-5-5. Raw result: `C:\Users\Khang\tmp\pghelm-slice1-inspect-1\claudex-ecm4dqio\result.json`. No requested model override. Plan review used 3 of5 rounds, fresh inspection used1 of2; no inspection-driven code repair round was needed. The final45-test run executed the source subsequently committed asda7968d; only documentation/evidence was written before that commit.
+
+Full response:
+
+```json
+{
+  "verdict": "APPROVED",
+  "summary": "I found no material correctness, spec-fidelity or security defect in the Slice 1 implementation. Four low-severity issues remain; none blocks the Slice 1 exit criteria, but F1 and F2 should be fixed before Slice 2.\n\nWhat I checked and found correct:\n- **Plan and files:** The plan text matches docs/slice-0.md, and the src/ files I read in this worktree match the diff.\n- **Prior findings:** All earlier dispositions hold.\n  - The CLI bootstrap subscribes only when `create_queue` returns 1, under the migration lock with the 15s lock / 30s statement bounds.\n  - The migration runner runs the installer and the ledger writes in one transaction on one client, after a lock taken in a separate statement. It checks the vendor manifest and bytes before opening a connection.\n  - Every scheduler call takes the try-lock on (1346848837, 3) in a separate statement and commits on its own. Step 2 runs in its own transaction, and startup refuses `autovacuum=off`.\n  - `force_next_tick` only bumps the event sequence; the final pinned `force_tick` override inserts no tick.\n- **Plan coverage:** The tests cover each S1-01..S1-10 criterion: commit inversion, rollback at each boundary, overflow raising 54000, backend termination, the empty-batch rollback/commit, the late subscriber, the bare P0001 race plus the gated recovery, NOWAIT rotation skip plus the queue-row lock timeout, and role separation.\n- **Test counts:** The reported 45 tests (32 integration, 13 unit) match the test sources.\n\nRemaining low-severity issues:\n- **F1:** The `transaction()` helper can report success when PostgreSQL actually rolled back. This is latent today, but matters once Slice 2 adds savepoints.\n- **F2:** Smoke reads from the configured consumer without taking the reserved dispatch gate.\n- **F3:** The Slice 1 report lists commands, such as `pnpm install --frozen-lockfile`, that have no recorded output in the evidence file.\n- **F4:** The lifecycle tests share one queue and depend on running in order.",
+  "findings": [
+    {
+      "id": "S1R-01-commit-on-aborted-tx-reports-success",
+      "severity": "low",
+      "path": "src/db.ts",
+      "evidence": "`transaction()` (src/db.ts:24-37) runs `await client.query('COMMIT')` and returns the result without checking the command tag.\n\nIf a statement inside `work` fails and the callback catches the error and returns normally, the transaction is in the aborted state. PostgreSQL then answers COMMIT with the command tag `ROLLBACK` and sends no ErrorResponse, so node-postgres does not throw. The helper returns as if the work committed.\n\nNo current caller swallows database errors:\n- smoke's try/catch wraps only JSON.parse and Zod.\n- schedulerCall and migrate do not catch.\n\nSo no Slice 1 path is affected. However, the approved Slice 2 design (per-event savepoints that catch conversion errors) is exactly the pattern where one missed `ROLLBACK TO SAVEPOINT` turns into a dispatcher that logs a staged and acked batch which was actually rolled back. The cursor would not advance and the batch would replay, so no data is lost, but the logs would say it succeeded.",
+      "fix": "Capture the COMMIT result and throw unless `result.command === 'COMMIT'`, for example: `throw new Error('Transaction was rolled back by the server')`. Add a regression test in migrations.test.ts: inside `work`, catch a failing statement and return normally, then assert that `transaction()` rejects."
+    },
+    {
+      "id": "S1R-02-smoke-receives-without-dispatch-gate",
+      "severity": "low",
+      "path": "src/smoke.ts",
+      "evidence": "`smoke()` (src/smoke.ts:18-31) calls `pgque.receive` and `pgque.ack` on the configured CONSUMER_NAME without first taking `pg_try_advisory_xact_lock(1346848837, 2)` in a separate statement.\n\nThe plan says 'All pgHelm inbox writers obey this gate' and that an uncoordinated consumer of the same subscription must be prevented. README says bare concurrent receive/ack reproducibly raises P0001, and S1-08 demonstrates it.\n\nToday the only protection is the README note 'Run one smoke invocation at a time'. Two overlapping smoke runs (or smoke running beside the future dispatcher on the default `pghelm_demo_consumer`) can recreate the P0001 interleaving from S1-08. The losing transaction rolls back, so this is a liveness and diagnosability problem, not a correctness one.",
+      "fix": "In smoke's transaction, take `SELECT pg_try_advisory_xact_lock(1346848837, 2)` as a separate statement before receive. If it returns false, commit or roll back the empty transaction and poll again. Alternatively, run smoke on a dedicated smoke-only consumer so it can never share the Slice 2 dispatch subscription."
+    },
+    {
+      "id": "S1R-03-report-claims-unrecorded-command",
+      "severity": "low",
+      "path": "docs/slice-1.md",
+      "evidence": "The Section F table (docs/slice-1.md:57) lists `pnpm install --frozen-lockfile` with exit 0 as an executed final gate.\n\ndocs/evidence/slice-1-commands.json records only:\n- typecheck, lint and build\n- the two test invocations\n- db:migrate and smoke\n- the psql settings query\n- `git diff --check`\n\nIt has no entry for the install, for `docker compose ... up -d --wait`, or for separate `test:unit` / `test:integration` runs.\n\nThe plan's exit criterion requires 'exact commands/output in report'. The install claim therefore cannot be traced to recorded evidence.",
+      "fix": "Re-run `pnpm install --frozen-lockfile` (and optionally the compose bring-up) in the final verification harness and append the exit codes and output to slice-1-commands.json. Otherwise, remove the row from Section F or mark it as not recorded."
+    },
+    {
+      "id": "S1R-04-lifecycle-tests-share-queue-state",
+      "severity": "low",
+      "path": "tests/integration/lifecycle.test.ts",
+      "evidence": "The plan requires 'per-test isolated queues' within a fixture database. In lifecycle.test.ts, the smoke-repeat, restart and foreign-event tests all use the queue `lifecycle` and the consumer `consumer` created in beforeAll.\n\nThe last test publishes 'foreign-event' and leaves an open, unacknowledged batch from an autocommit receive. Any test added after it on that queue would fail or rely on that state.\n\nThe plan also asks infrastructure smoke tests to verify that only their own containers are cleaned up. The suites call `container.stop()` but never assert that cleanup.",
+      "fix": "Create a fresh queue and consumer per test, for example with a randomUUID-suffixed helper like pgque.test.ts's `queue()`, wherever a test publishes or receives. Optionally assert after `stop()` that the container ID no longer exists and that the named Compose volume is untouched."
+    }
+  ],
+  "coverage": [
+    "Read the full plan text in the prompt; it matches docs/slice-0.md. Reviewed the change manifest and the full tracked diff.",
+    "Read src/cli.ts, src/smoke.ts and src/ticker.ts directly in the worktree and confirmed they match the diff. Reviewed src/db.ts, src/config.ts and src/migrate.ts as shown in the diff.",
+    "Traced shared-state writers:\n- Advisory keys 1/2/3 across the CLI bootstrap, migrate, schedulerCall, smoke and the tests.\n- pgque.ticker callers: scheduler, smoke, create_queue's internal tick, and the tests.\n- Subscription cursor writers: receive/ack in smoke and tests, subscribe in bootstrap and tests.",
+    "Checked against the pinned installer in the diff:\n- create_queue return values and its internal ticker call\n- force_tick override (no tick insert)\n- ticker(text) has no queue lock\n- maint_rotate_tables_step1 NOWAIT/TRUNCATE and tick deletion\n- maint_rotate_tables_step2\n- maint() skips step2 and vacuum\n- receive's empty-batch finish and 54000 overflow\n- finish_batch return values\n- role grants",
+    "Reviewed all three integration test files and both unit test files against S1-01..S1-10, plus the docs/slice-1.md test-count claims.",
+    "Reviewed vitest.config.ts, tsconfig, eslint config, .gitattributes (vendor -text, eol=lf for migration checksums), compose.yaml (loopback binding, pinned digest, durability settings), the CI workflow, package.json pins and .env.example.",
+    "Compared docs/slice-1.md Section F claims with docs/evidence/slice-1-commands.json and slice-1-tests.json."
+  ],
+  "limitations": [
+    "I could not run commands or tests. No test pass is claimed here, and the 45/45 result comes only from the committed evidence files, which I did not independently reproduce.",
+    "I did not recompute the SHA256 of vendor/pgque/pgque.sql, the plan, or the manifest, and did not confirm that the evidence run used the exact reviewed commit.",
+    "I did not read pnpm-lock.yaml in depth for supply-chain integrity, and did not check whether the GitHub Actions run passes.",
+    "S1R-01's node-postgres behaviour (COMMIT on an aborted transaction returns the ROLLBACK tag without throwing) comes from PostgreSQL protocol semantics and was not observed in this repository.",
+    "I did not open the raw evidence files under C:\\Users\\Khang\\tmp or the other review worktrees."
+  ]
+}
+```
+
+Dispositions: S1R-01 accepted as mandatory before Slice2 savepoint/error-recovering callbacks; current callbacks all propagate SQL errors, so no Slice1 path is affected. S1R-02 accepted boundary: smoke is synthetic-only, one invocation at a time; Slice2 must use a separate dispatcher subscription and mandatory gate, never run smoke on it. S1R-03 resolved by attaching the already-observed frozen-lockfile install entry and raw output from the earlier verification harness (same unchanged package/lockfile); not a newly executed install. S1R-04 accepted test limitation: lifecycle cases share sequential queue state; create isolated queues before adding more cases in Slice2. Container stop calls ran, but explicit post-removal/volume-preservation assertions were not added.
+
+After inspection only review/report/evidence documents were updated. Application code, tests, configuration and vendor remain identical to inspectedda7968d. No benchmark, production, or GitHub-hosted CI pass is implied.

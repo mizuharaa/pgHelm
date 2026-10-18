@@ -1,5 +1,13 @@
 [
   {
+    "command": "pnpm.cmd install --frozen-lockfile",
+    "exit_code": 0,
+    "seconds": 1.372,
+    "output": "C:\\Users\\Khang\\tmp\\pghelm-slice1-verification\\00.txt",
+    "observed_output": "Lockfile is up to date, resolution step is skipped\nAlready up to date\n\nDone in 1.1s using pnpm v9.15.9\n\n",
+    "note": "Earlier verification run; package and lockfile unchanged afterward. Attached after inspection to close S1R-03."
+  },
+  {
     "command": "pnpm.cmd typecheck",
     "exit_code": 0,
     "seconds": 2.665,

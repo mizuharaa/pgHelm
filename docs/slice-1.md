@@ -50,7 +50,7 @@ Runtime dependencies: `pg`, Zod, Pino. Development dependencies: TypeScript, Nod
 
 ## F. Tests actually executed
 
-Final local gates after regression repairs:
+Observed local gates after regression repairs, plus the earlier frozen-lockfile install against the unchanged lockfile:
 
 | Command | Observed result | Exit | Establishes |
 |---|---|---|---|
@@ -82,6 +82,8 @@ Raw machine-readable results are in `docs/evidence/slice-1-tests.json`; commands
 
 All ten engine invariants remain obligations for later slices. This slice provides transaction primitives and PgQue behavior evidence, not stale-worker fencing, crash-safe job execution, safe execution retention, or scaling proof. No long held-xmin test or benchmark was run. The trusted local demo admin login is not a production role configuration. Cross-database concurrent installers remain unsupported because PgQue creates cluster-global roles.
 
+Independent Claude inspection approved the current snapshot with these limits: the transaction helper assumes callbacks propagate SQL errors (validate the COMMIT command tag before Slice2 adds error recovery); smoke must run once at a time and never share the future dispatcher subscription; lifecycle tests currently share sequential queue state and need isolation before expansion. Explicit post-removal container/volume assertions were not added. The missing install evidence was attached from the already-observed earlier run. No source/test/configuration edits followed inspection.
+
 ## H. What you should understand
 
 **Commit order differs from ID order:** A can allocate ID10 and pause while B commits ID11; the test consumes B and later consumes A. A numerical source-ID watermark would miss A.
@@ -107,7 +109,7 @@ Expect five passing files and 45 tests on the reviewed snapshot. Docker must be 
 
 - **Complete locally:** authorized Slice 1 infrastructure, CLI and required test paths.
 - **Tested locally:** 45 assertions, typecheck/lint/build, pinned database runtime and compiled CLI smoke.
-- **Review:** Codex QA findings repaired; Claude plan approved. Fresh code-inspection outcome is appended to the review log before final handoff.
+- **Review:** Codex QA findings repaired; Claude plan approved. Fresh Claude code inspection APPROVED snapshot da7968d with four low-priority notes; dispositions are in the review log.
 - **Deferred:** execution inbox, distributed workers, fencing, retries, watchdog, metrics stack, benchmark harness/results, production deployment.
 - **Approval gate:** stop before Slice 2; user review is still required.
 

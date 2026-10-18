@@ -436,7 +436,7 @@ describe.sequential('pinned PgQue transaction contract (real PostgreSQL 17)', ()
     }
   });
 
-  it('S1-09 rotation preserves lagging work, bounds lock waits, and commits step 2 separately', async () => {
+  it('S1-09 rotation preserves lagging work, skips NOWAIT conflicts, bounds lock waits, and commits step 2 separately', async () => {
     const q = await queue();
     const id = await send(q, 'retained until acknowledged');
     await tick(q);
@@ -460,6 +460,22 @@ describe.sequential('pinned PgQue transaction contract (real PostgreSQL 17)', ()
     const blocker = await pool.connect();
     const maintenance = await pool.connect();
     try {
+      const nextTable = await pool.query<{ quoted_table: string }>(
+        "SELECT pgque.quote_fqname(queue_data_pfx || '_' || ((queue_cur_table + 1) % queue_ntables)::text) AS quoted_table FROM pgque.queue WHERE queue_name = $1",
+        [q.name],
+      );
+      await blocker.query('BEGIN');
+      // Only this server-quoted identifier is interpolated; an ordinary reader blocks TRUNCATE's exclusive lock.
+      await blocker.query(`LOCK TABLE ${nextTable.rows[0]!.quoted_table} IN ACCESS SHARE MODE`);
+      const skipped = await maintenance.query<{ result: number }>(
+        'SELECT pgque.maint_rotate_tables_step1($1) AS result',
+        [q.name],
+      );
+      expect(skipped.rows[0]!.result).toBe(0);
+      expect(await rotationState()).toEqual(before);
+      // Releasing this conflict allows the successful rotation below; no private metadata is changed.
+      await blocker.query('ROLLBACK');
+
       const blockerPid = await backendPid(blocker);
       const maintenancePid = await backendPid(maintenance);
       await blocker.query('BEGIN');

@@ -2,7 +2,7 @@
 
 Current authorization: Slice 1 infrastructure and PgQue integration, approved by the user's Continue and explicit parallel-build instruction. Apply the acceptance criteria in docs/slice-0.md. Each subsequent slice still requires separate approval. No execution inbox or worker orchestration in Slice 1.
 
-Read `docs/slice-0.md` before project work. Keep all ten invariants and the slice acceptance criteria visible in reviews. Never connect to PlayerOne databases or services; use synthetic local workloads.
+Read `docs/slice-0.md`, including its final review clarifications, and `docs/review-log.md` before project work. Keep all ten invariants and the slice acceptance criteria visible in reviews. Never connect to PlayerOne databases or services; use synthetic local workloads.
 
 # Build and review hooks
 

@@ -114,6 +114,8 @@ describe.sequential('S1-01 pinned installation', () => {
         void second.catch(() => undefined);
         pending.push(second);
         await waitUntil(async () => (await gate.query('SELECT $1::int = ANY(pg_blocking_pids($2)) AS blocked', [firstPid, secondPid])).rows[0]?.blocked === true);
+        // A real lock barrier was observed above; exceed the normal 1s lock budget deliberately.
+        await gate.query('SELECT pg_sleep(1.1)');
       } finally {
         await gate.query('SELECT pg_advisory_unlock(880001)');
         gate.release();

@@ -14,6 +14,6 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
-    command: ["postgres", "-c", "fsync=on", "-c", "synchronous_commit=on", "-c", "full_page_writes=on"]
+    command: ["postgres", "-c", "fsync=on", "-c", "synchronous_commit=on", "-c", "full_page_writes=on", "-c", "autovacuum=on"]
 volumes:
   pghelm_data:

@@ -1,0 +1,65 @@
+[
+  {
+    "command": "pnpm.cmd typecheck",
+    "exit_code": 0,
+    "seconds": 2.665,
+    "output": "C:\\Users\\Khang\\tmp\\pghelm-slice1-final-verification\\00.txt",
+    "observed_output": "\n> pghelm@0.1.0 typecheck C:\\Users\\Khang\\pgHelm\n> tsc --noEmit\n\n\n"
+  },
+  {
+    "command": "pnpm.cmd lint",
+    "exit_code": 0,
+    "seconds": 2.475,
+    "output": "C:\\Users\\Khang\\tmp\\pghelm-slice1-final-verification\\01.txt",
+    "observed_output": "\n> pghelm@0.1.0 lint C:\\Users\\Khang\\pgHelm\n> eslint .\n\n\n"
+  },
+  {
+    "command": "pnpm.cmd build",
+    "exit_code": 0,
+    "seconds": 2.351,
+    "output": "C:\\Users\\Khang\\tmp\\pghelm-slice1-final-verification\\02.txt",
+    "observed_output": "\n> pghelm@0.1.0 build C:\\Users\\Khang\\pgHelm\n> tsc -p tsconfig.build.json\n\n\n"
+  },
+  {
+    "command": "pnpm.cmd test --reporter=verbose --reporter=json --outputFile.json=test-results/final.json",
+    "exit_code": 1,
+    "seconds": 0.644,
+    "output": "C:\\Users\\Khang\\tmp\\pghelm-slice1-final-verification\\03.txt",
+    "observed_output": "\n\u2009ERROR\u2009 Unknown option: 'outputFile.json'\nFor help, run: pnpm help test\n"
+  },
+  {
+    "command": "pnpm.cmd run test --reporter=verbose --reporter=json --outputFile.json=test-results/final.json",
+    "exit_code": 0,
+    "seconds": 38.047,
+    "output": "C:\\Users\\Khang\\tmp\\pghelm-slice1-final-verification\\04.txt",
+    "observed_output": "\n> pghelm@0.1.0 test C:\\Users\\Khang\\pgHelm\n> vitest run \"--reporter=verbose\" \"--reporter=json\" \"--outputFile.json=test-results/final.json\"\n\n\n RUN  v4.0.18 C:/Users/Khang/pgHelm\n\n \u2713 tests/unit/config.test.ts > local-only configuration > accepts the dedicated development database and bounded defaults 13ms\n \u2713 tests/unit/config.test.ts > local-only configuration > rejects unsafe connection input postgresql://u:p@remote.example/pghelm 1ms\n \u2713 tests/unit/config.test.ts > local-only configuration > rejects unsafe connection input postgresql://u:p@localhost/production 0ms\n \u2713 tests/unit/config.test.ts > local-only configuration > rejects unsafe connection input postgresql://u:p@localhost/pghelm?host=remote.example 0ms\n \u2713 tests/unit/config.test.ts > local-only configuration > rejects unsafe connection input postgresql://u:p@localhost/pghelm?options=-c%20statement_timeout=0 0ms\n \u2713 tests/unit/config.test.ts > local-only configuration > rejects unsafe connection input https://localhost/pghelm 0ms\n \u2713 tests/unit/config.test.ts > local-only configuration > rejects unsafe connection input postgresql://localhost/pghelm 0ms\n \u2713 tests/unit/config.test.ts > local-only configuration > requires explicit connection configuration and rejects invalid bounds 4ms\n \u2713 tests/unit/config.test.ts > local-only configuration > enforces the pinned PgQue 57-byte queue-name ceiling 4ms\n \u2713 tests/integration/lifecycle.test.ts > CLI migrate never recreates a missing existing consumer 1106ms\n \u2713 tests/integration/lifecycle.test.ts > rejects missing consumer without silently recreating its cursor 13ms\n \u2713 tests/integration/lifecycle.test.ts > runs the actual smoke path repeatedly with committed receive and acknowledgment 87ms\n \u2713 tests/integration/lifecycle.test.ts > ticks, drains, and restarts without replacing the existing subscription 77ms\n \u2713 tests/integration/lifecycle.test.ts > serializes scheduler replicas with a separate-statement transaction lock 39ms\n{\"level\":40,\"time\":1792346518581,\"pid\":19476,\"hostname\":\"Daniel\",\"queues\":[{\"queue_name\":\"scheduler_rotation\"}],\"msg\":\"Rotation remains overdue; inspect consumer lag and locks\"}\n{\"level\":40,\"time\":1792346518604,\"pid\":19476,\"hostname\":\"Daniel\",\"queues\":[{\"queue_name\":\"scheduler_rotation\"}],\"msg\":\"Rotation remains overdue; inspect consumer lag and locks\"}\n \u2713 tests/integration/lifecycle.test.ts > force_next_tick alone does not insert a tick 9ms\n \u2713 tests/integration/lifecycle.test.ts > two scheduler loops complete rotation in separate transactions and preserve delivery 210ms\n \u2713 tests/integration/lifecycle.test.ts > refuses to acknowledge non-smoke events on the synthetic demo subscription 579ms\n \u2713 tests/integration/pgque.test.ts > pinned PgQue transaction contract (real PostgreSQL 17) > S1-02 commits the complete batch and distinguishes an already-closed batch 138ms\n \u2713 tests/integration/pgque.test.ts > pinned PgQue transaction contract (real PostgreSQL 17) > S1-03 preserves a lower event ID that commits after a higher one 131ms\n \u2713 tests/integration/pgque.test.ts > pinned PgQue transaction contract (real PostgreSQL 17) > S1-03 a producer transaction cannot make its own event visible by ticking before commit 82ms\n \u2713 tests/integration/pgque.test.ts > pinned PgQue transaction contract (real PostgreSQL 17) > S1-04 rollback after receive preserves cursor and removes sink writes 94ms\n \u2713 tests/integration/pgque.test.ts > pinned PgQue transaction contract (real PostgreSQL 17) > S1-04 rollback after stage preserves cursor and removes sink writes 82ms\n \u2713 tests/integration/pgque.test.ts > pinned PgQue transaction contract (real PostgreSQL 17) > S1-04 rollback after ack preserves cursor and removes sink writes 77ms\n \u2713 tests/integration/pgque.test.ts > pinned PgQue transaction contract (real PostgreSQL 17) > S1-05 overflow aborts the complete receive instead of paginating 132ms\n \u2713 tests/integration/pgque.test.ts > pinned PgQue transaction contract (real PostgreSQL 17) > S1-06 reuses a committed open batch after consumer connection restart 100ms\n \u2713 tests/integration/pgque.test.ts > pinned PgQue transaction contract (real PostgreSQL 17) > S1-06 backend death after uncommitted receive rolls back handoff 199ms\n \u2713 tests/integration/pgque.test.ts > pinned PgQue transaction contract (real PostgreSQL 17) > S1-06 backend death after uncommitted ack rolls back handoff 212ms\n \u2713 tests/integration/pgque.test.ts > pinned PgQue transaction contract (real PostgreSQL 17) > S1-06 empty batch auto-ack rolls back and then advances only on commit 70ms\n \u2713 tests/integration/pgque.test.ts > pinned PgQue transaction contract (real PostgreSQL 17) > S1-07 registration starts at the latest existing tick, including unticked pre-subscribe events 62ms\n \u2713 tests/integration/pgque.test.ts > pinned PgQue transaction contract (real PostgreSQL 17) > S1-08 characterizes bare receive after concurrent COMMIT, then recovers safely 103ms\n \u2713 tests/integration/pgque.test.ts > pinned PgQue transaction contract (real PostgreSQL 17) > S1-08 characterizes bare receive after concurrent ROLLBACK, then recovers safely 90ms\n \u2713 tests/integration/pgque.test.ts > pinned PgQue transaction contract (real PostgreSQL 17) > S1-08 separate advisory gate rejects the contender before receive; owner COMMIT releases it 77ms\n \u2713 tests/integration/pgque.test.ts > pinned PgQue transaction contract (real PostgreSQL 17) > S1-08 separate advisory gate rejects the contender before receive; owner ROLLBACK releases it 92ms\n \u2713 tests/integration/pgque.test.ts > pinned PgQue transaction contract (real PostgreSQL 17) > S1-09 rotation preserves lagging work, skips NOWAIT conflicts, bounds lock waits, and commits step 2 separately 1166ms\n \u2713 tests/integration/migrations.test.ts > S1-01 pinned installation > installs PgQue on PostgreSQL 17 and reruns without replacing the migration ledger 219ms\n \u2713 tests/integration/migrations.test.ts > S1-01 pinned installation > rejects modified applied SQL without executing it 176ms\n \u2713 tests/integration/migrations.test.ts > S1-01 pinned installation > rolls back all SQL and the ledger when a migration fails, and permits corrected retry 238ms\n \u2713 tests/integration/migrations.test.ts > S1-01 pinned installation > serializes competing migration transactions before inspecting or changing the ledger 1377ms\n \u2713 tests/integration/migrations.test.ts > S1-10 transaction and role boundaries > rolls back failed work and releases the sole pool connection in a usable state 139ms\n \u2713 tests/integration/migrations.test.ts > S1-10 transaction and role boundaries > enforces configured statement and lock timeouts and releases connections after cancellation 1234ms\n \u2713 tests/integration/migrations.test.ts > S1-10 transaction and role boundaries > separates producer and consumer privileges and records the administrative maintenance exception 276ms\n \u2713 tests/unit/vendor.test.ts > pinned installer file integrity > checks unmodified before acquiring a database connection 255ms\n \u2713 tests/unit/vendor.test.ts > pinned installer file integrity > checks installer bytes before acquiring a database connection 193ms\n \u2713 tests/unit/vendor.test.ts > pinned installer file integrity > checks malformed manifest before acquiring a database connection 203ms\n \u2713 tests/unit/vendor.test.ts > pinned installer file integrity > checks wrong manifest digest before acquiring a database connection 178ms\n\n Test Files  5 passed (5)\n      Tests  45 passed (45)\n   Start at  14:01:47\n   Duration  35.84s (transform 440ms, setup 0ms, import 3.98s, tests 29.69s, environment 1ms)\n\nJSON report written to C:/Users/Khang/pgHelm/test-results/final.json\n\n"
+  },
+  {
+    "command": "pnpm.cmd db:migrate",
+    "exit_code": 0,
+    "seconds": 4.047,
+    "output": "C:\\Users\\Khang\\tmp\\pghelm-slice1-final-verification\\05.txt",
+    "observed_output": "\n> pghelm@0.1.0 db:migrate C:\\Users\\Khang\\pgHelm\n> pnpm build && node --env-file-if-exists=.env dist/cli.js migrate\n\n\n> pghelm@0.1.0 build C:\\Users\\Khang\\pgHelm\n> tsc -p tsconfig.build.json\n\n{\"level\":30,\"time\":1792346547541,\"pid\":3760,\"hostname\":\"Daniel\",\"msg\":\"Migrations verified; local queue and consumer provisioned\"}\n\n"
+  },
+  {
+    "command": "pnpm.cmd smoke",
+    "exit_code": 0,
+    "seconds": 4.638,
+    "output": "C:\\Users\\Khang\\tmp\\pghelm-slice1-final-verification\\06.txt",
+    "observed_output": "\n> pghelm@0.1.0 smoke C:\\Users\\Khang\\pgHelm\n> pnpm build && node --env-file-if-exists=.env dist/cli.js smoke\n\n\n> pghelm@0.1.0 build C:\\Users\\Khang\\pgHelm\n> tsc -p tsconfig.build.json\n\n{\"level\":30,\"time\":1792346552177,\"pid\":17120,\"hostname\":\"Daniel\",\"sourceId\":\"4005\",\"received\":1,\"msg\":\"Smoke publish/receive/ack committed\"}\n\n"
+  },
+  {
+    "command": "docker compose -f infra/compose.yaml -p pghelm exec -T postgres psql -U pghelm -d pghelm -c \"SELECT version(), pgque.version(); SHOW fsync; SHOW synchronous_commit; SHOW full_page_writes; SHOW autovacuum;\"",
+    "exit_code": 0,
+    "seconds": 0.59,
+    "output": "C:\\Users\\Khang\\tmp\\pghelm-slice1-final-verification\\07.txt",
+    "observed_output": "                                                           version                                                            | version \n------------------------------------------------------------------------------------------------------------------------------+---------\n PostgreSQL 17.11 (Debian 17.11-1.pgdg12+2) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit | 0.2.2\n(1 row)\n\n fsync \n-------\n on\n(1 row)\n\n synchronous_commit \n--------------------\n on\n(1 row)\n\n full_page_writes \n------------------\n on\n(1 row)\n\n autovacuum \n------------\n on\n(1 row)\n\n\n"
+  },
+  {
+    "command": "git diff --check",
+    "exit_code": 0,
+    "seconds": 0.163,
+    "output": "C:\\Users\\Khang\\tmp\\pghelm-slice1-final-verification\\08.txt",
+    "observed_output": "\nwarning: in the working copy of 'docs/review-log.md', CRLF will be replaced by LF the next time Git touches it\n"
+  }
+]

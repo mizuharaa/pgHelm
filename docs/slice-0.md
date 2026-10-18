@@ -1,7 +1,7 @@
 # Slice 0 — Research, audit, and architecture
 
-Date: 2026-10-18. Decision state: **PROPOSED; awaiting user architectural approval**.
-Scope: documents and Git setup only. No application, migrations, project containers, or executable system tests have been created. Source-supported design is not runtime proof.
+Date: 2026-10-18. Decision state: **Slice 1 authorized by user Continue and parallel-build instruction.** Later slices still require approval. This document records the original research; runtime evidence belongs in docs/slice-1.md.
+Historical Slice 0 scope: documents and Git setup only. Sections A-K describe that research snapshot, not current implementation status. Slice 1 is now authorized and its implementation/evidence is recorded separately. Source-supported design is not runtime proof.
 
 ## A. What we built
 
@@ -329,7 +329,7 @@ Expected: private repo and origin above, main plus isolated audit worktrees, doc
 - **Complete:** repository setup and Slice 0 architecture/research deliverables.
 - **Tested:** tool availability, GitHub remote setup, source/image provenance probes only.
 - **Partially tested:** none of the proposed engine behavior; static review must not be described as integration testing.
-- **Blocked:** moving to Slice 1 awaits explicit user architectural approval, as required by the master prompt. Independent review status and remaining findings are in `docs/review-log.md`.
+- **Historical approval gate:** the user subsequently authorized Slice 1; this is no longer a blocker. Independent review status and remaining findings are in `docs/review-log.md`.
 - **Deferred:** all application/schema implementation, runtime proof, observability stack, cleanup, benchmarks and deployment.
 
 ## K. Slice 1 proposal — infrastructure and verified PgQue API
@@ -372,4 +372,19 @@ pnpm smoke
 
 Exit requires actual exit 0 and observed assertions for S1-01 through S1-10 against PG17/PgQue pins, exact commands/output in report, Codex repair plus independent Claude inspection, and user review before Slice 2. Runtime inability is a blocker, not a mock-based pass. No performance or reliability number is promised.
 
-**STOP — Awaiting approval for the next slice.**
+### Review clarifications accepted during Slice 1 preparation
+
+The following supersede ambiguous wording above without authorizing later-slice implementation:
+
+- Scheduler replicas serialize **every** ticker/maintenance/retry/rotation-step2 call with a separate-statement transaction advisory lock `(1346848837, 3)`. Migration uses key `(1346848837, 1)` and dispatch reserves `(1346848837, 2)`. No uncoordinated pg_cron or external ticker may run alongside this scheduler. The concurrent upstream ticker anomaly is source-derived and UNVERIFIED; the lock prevents overlapping pgHelm calls. Test lock loser/no-op, successful retry, and concurrent scheduler delivery. Require `autovacuum=on`; maintenance does not replace autovacuum.
+- Local CLI migration bootstrap may subscribe only when it created the queue in that same transaction. An existing queue without its expected consumer fails closed; migrations never recreate its cursor. Test the actual CLI after unsubscribe. Migration/bootstrap use transaction-local 15s lock and 30s statement bounds rather than the normal 1s/5s operation limits; competitors exceeding those bounds fail safely and can be rerun.
+- Slice 2 must classify an existing source receipt with identical raw type/payload as verified replay without another insert. Different content at the same source identity is a fatal conflict, never silently skipped. Persist and validate the source-generation binding to actual queue/subscription identities; a recreated queue or consumer requires explicit reprovisioning and a new generation. Add replay, conflict and recreation tests before dispatch ships.
+- A successful receive transaction must commit even on zero returned rows, because receive may have auto-advanced an empty batch. Only errors or a missed dispatch gate justify rollback. Test an empty window followed by a nonempty window in Slice 2.
+- Slice 4 Start must reject unresolved active attempts and premature retry eligibility. Generate attempt IDs before the transaction and reconcile that exact ID after an ambiguous Start COMMIT before running the handler. No second attempt may overwrite unresolved authorization. Test both possible ambiguous-commit outcomes.
+- Slice 2 poison-batch detection keys on stable tick-window/source identities, never batch_id (rollback can allocate another ID). Establish an exact conversion-error SQLSTATE allowlist against PG17; timeouts, connection errors and resource exhaustion roll back the entire dispatch. Savepoints cover read-only casts/lookups and are released before top-level inserts.
+- Slice 6/7 must include MultiXact SLRU statistics and freeze ages in addition to heap/index/WAL accounting. Keep the proposed job-to-shard FK until evidence justifies a separately reviewed alternative; removing it is not authorized by this note.
+- Isolated review worktrees include `pghelm-source-audit` (`review/pgque-source`), `pghelm-spec-audit` (`review/spec`), and `pghelm-claude-qa` (`review/claude-qa`). Codex QA is additional read-only review; Claude remains the independent Claudex inspector.
+
+These are design obligations, not claims that later-slice behavior has been implemented or tested.
+
+**STOP after Slice 1 — Await approval before Slice 2.**

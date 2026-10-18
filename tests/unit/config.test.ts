@@ -21,4 +21,9 @@ describe('local-only configuration', () => {
     expect(() => readConfig({})).toThrow();
     expect(() => readConfig({ DATABASE_URL: 'postgresql://u:p@localhost/pghelm', POOL_MAX: '0' })).toThrow();
   });
+  it('enforces the pinned PgQue 57-byte queue-name ceiling', () => {
+    const env = { DATABASE_URL: 'postgresql://u:p@localhost/pghelm', QUEUE_NAME: 'q'.repeat(57) };
+    expect(readConfig(env).queue).toHaveLength(57);
+    expect(() => readConfig({ ...env, QUEUE_NAME: 'q'.repeat(58) })).toThrow();
+  });
 });

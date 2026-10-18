@@ -29,6 +29,8 @@ export async function migrate(pool: Pool, migrationDirectory?: string): Promise<
     migrations.push({ name, bytes, sha256: digest(bytes) });
   }
   await transaction(pool, async (client) => {
+    await client.query("SET LOCAL lock_timeout = '15s'");
+    await client.query("SET LOCAL statement_timeout = '30s'");
     // Separate statement: a waiter reads the ledger only after the lock holder commits.
     await client.query('SELECT pg_advisory_xact_lock(1346848837, 1)');
     await client.query(`CREATE TABLE IF NOT EXISTS public.pghelm_migration (

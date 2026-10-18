@@ -401,3 +401,177 @@ Executed Python stdin assertions confirmed: result is APPROVED with exit 0; revi
 
 Git push of documentation through 21a9481 exited 0; GitHub API returned 21a9481cc854c8dafd0c21c62fbd394f1e2ad3ca. Final review-log commit and push are verified in the host handoff. No typecheck, lint, integration, chaos, or benchmark result exists in this slice.
 Claudex runner check --host codex --repo C:\Users\Khang\pw\pghelm-claude-qa --plan docs/slice-0.md --approval C:\Users\Khang\tmp\pghelm-claudex-review-3\claudex-_m_er8js\result.json: exit 0, observed: Approval matches the current plan. Final document assertions also exited 0.
+
+
+## Slice 1 plan transfer review, round 1
+
+Host/builder Codex, independent reviewer Claude; requested default model, observed claude-opus-5-5. Baseline 8326969. User Continue and parallel-build instruction authorize Slice 1 only. Additional Codex QA is read-only. Plan rounds max 5; build fix rounds max 2; fresh final inspections max 2. Raw artifacts: `C:\Users\Khang\tmp\pghelm-slice1-plan-review\claudex-kyjb4k99\result.json`. Review was renewed because approval was originally bound to the QA worktree. Implementation preparation overlapped this review; no claim that the earlier path-bound approval covered main.
+
+Full response:
+
+```json
+{
+  "verdict": "REVISE",
+  "summary": "The supplied plan is byte-for-byte the same text as C:\\Users\\Khang\\pgHelm\\docs\\slice-0.md. I re-checked its PgQue claims against the pinned v0.2.2 sql/pgque.sql and they hold:\n- receive wraps next_batch and get_batch_events and raises 54000 on the (limit+1)th row (5342\u20135387).\n- An empty batch is finished automatically.\n- ack calls finish_batch, which returns 1 or 0 (5884\u20135934).\n- The subscription row is locked FOR UPDATE (5766).\n- register_consumer_at starts a new consumer at the latest existing tick and leaves an existing registration where it is (1840\u20131877).\n- maint() skips step2 and vacuum (5273\u20135278).\n- receive, ack and subscribe are granted to the reader role, and send to the writer role.\n- The installer contains no psql meta-commands and no transaction control outside function bodies, so running it on the same client is feasible.\n\nThe design still has material gaps that earlier rounds did not cover:\n- **Concurrent tickers:** PgQue's ticker(queue) takes no lock, and nothing in the plan limits the ticker/maintenance role to one instance across application processes.\n- **Repeated source identity:** the plan does not say what happens when a (source_generation, msg_id) that already has a receipt arrives again, and nothing detects a dropped and recreated queue.\n- **Lost Start commit reply:** the Start-intent transaction has no defined handling when the COMMIT reply is lost, and its stated preconditions omit the active-attempt and eligibility checks.\n\nLower-severity items:\n- The plan does not say that the dispatcher must COMMIT when receive returns no rows.\n- autovacuum is relied on but never asserted.\n- MultiXact cost from the foreign-key KEY SHARE locks combined with shard row updates is not on the measurement list.\n- The Slice 2 obligations from round 3 live only in the review log, while the plan's own text still uses the superseded \"same-batch\" wording.\n- The worktree inventory in the plan is inaccurate.\n\nNone of these needs the architecture rebuilt; each needs plan text and a test before approval.",
+  "findings": [
+    {
+      "id": "S0R4-01-concurrent-ticker-instances",
+      "severity": "medium",
+      "path": "docs/slice-0.md",
+      "evidence": "ADR-003 puts a ticker role inside 'One application with independent dispatcher, worker, watchdog and ticker roles'. It defaults 'ticker=2' per process, says 'a per-process bound is not a cluster-global connection cap', and C lists 'Parallel worker processes', 'Multiple watchdogs' and 'gated replicas'. The only serialization rule given is 'No overlapping calls for a task', which is per process.\n\nPinned pgque.ticker(text) (694\u2013796) reads pgque.queue with no FOR UPDATE and no advisory lock. It inserts a tick using nextval(queue_tick_seq), and the tick table defaults tick_snapshot to pg_current_snapshot() (line 140). Within that INSERT the snapshot is taken at statement start, before nextval runs, so two tickers in different processes can interleave:\n1. T1 takes snapshot S_early.\n2. T2 takes S_late and gets tick 10.\n3. T1 gets tick 11.\n\nThe tick IDs are now in the opposite order to the snapshots. The consumer reads window 9\u219210 (S_late) and then 10\u219211 (S_early): batch_event_sql's xip branch (378\u2013430) adds txids without a pg_visible_in_snapshot(cur) check. Window 11\u219212 then re-includes events committed between S_early and S_late, so they are delivered twice. This is derived from the source and has not been run, but nothing in the plan rules it out. Upstream pg_cron start() (4258\u20134302) runs exactly one ticker job.",
+      "fix": "State that the ticker and maintenance roles are a single active instance per database. Enforce it in the database, not only per process: wrap each ticker(), maint(), maint_retry_events() and step2 call in a pg_try_advisory_xact_lock on a reserved key separate from the dispatch and migration keys, or allow only one designated scheduler process. Add an S1 test that runs two scheduler processes concurrently and asserts that tick_id order matches snapshot order and that no msg_id is delivered twice. Also make the dispatcher tolerate a redelivered msg_id (see S0R4-02)."
+    },
+    {
+      "id": "S0R4-02-existing-source-identity-and-queue-recreation",
+      "severity": "medium",
+      "path": "docs/slice-0.md",
+      "evidence": "Section C defines dispositions only for 'A new source tuple (source_generation, msg_id)'. The ingress_event row in Section D has PK (source_generation,msg_id) and 'One insert per source event in dispatch TX, including duplicates'. The plan never says what happens when a msg_id that already has a receipt is received again.\n\nThat can happen in three ways:\n- Operator repositioning: register_consumer_at with a tick resets sub_last_tick (1846\u20131854) and is granted to pgque_reader (4794).\n- Duplicate delivery from concurrent tickers (S0R4-01).\n- A queue dropped and recreated while the configured source_generation is unchanged: the new queue gets a new queue_id and a new event sequence, so msg_ids restart.\n\nIf the implementation inserts a receipt, the PK violation rolls back the batch every time and the pipeline halts after three tries (permanent stall). If it treats 'receipt exists' as an already-handled replay and skips the event, the recreated queue's new, distinct events are acked without any job, which silently breaks Invariant 1. Source generation is 'fixed configuration' and nothing detects a recreated queue.",
+      "fix": "Add an explicit fourth classification:\n- An existing (generation,msg_id) receipt with an equal raw_type and raw_payload is a verified source replay: insert no new receipt, and log/count it.\n- An existing receipt with a different raw_type or raw_payload is a source-identity conflict: halt and alert, never skip.\n\nPersist the binding between source_generation and PgQue identity (queue_name, queue_id, consumer co_id/sub_id) in pgHelm's schema. At startup, refuse to dispatch if pgque.queue.queue_id or the subscription no longer matches the recorded binding. Add Slice 2 tests for reposition replay, an identity conflict, and a drop/recreate run with a stale generation."
+    },
+    {
+      "id": "S0R4-03-ambiguous-start-intent-and-preconditions",
+      "severity": "medium",
+      "path": "docs/slice-0.md",
+      "evidence": "Section C's Start TX is 'lock shard -> fresh DB time + owner/epoch check -> select first job beyond progress -> append attempt intent + set head -> COMMIT', followed by the handler outside the transaction. The 'Never renew\u2026' paragraph after the timeline covers an ambiguous acquisition COMMIT and an ambiguous completion COMMIT, but not an ambiguous Start COMMIT. The Start preconditions also never require that no unresolved active attempt exists or that next_attempt_at <= clock_timestamp(), even though the shard row carries active_attempt_id and next_attempt_at.\n\nFailure scenario: the Start COMMIT reply is lost, and the worker still owns a valid lease and keeps renewing it.\n- If the worker retries Start and the transition only checks owner and epoch, it inserts attempt N+1 and overwrites active_attempt_id. Attempt N is left with no outcome, which breaks 'One engine result per start', and an extra budget unit is burned.\n- If the worker instead runs the handler although the COMMIT actually failed, the external effect happens with no attempt record and no budget consumed, and Finish is rejected.\n\nA watchdog cannot help in either case because the lease is valid. A Start that ignores next_attempt_at would also skip the retry backoff.",
+      "fix": "Generate attempt_id on the client and make the Start transition idempotent on it. After an ambiguous COMMIT, read back attempt/shard.active_attempt_id by that attempt_id before running the handler or retrying Start. In the locked Start validation, require active_attempt_id IS NULL (or an already-recorded outcome) and next_attempt_at IS NULL OR <= clock_timestamp(). Add Slice 4 tests for a lost Start-commit reply in both outcomes, and for a Start attempted before next_attempt_at."
+    },
+    {
+      "id": "S0R4-04-empty-receive-must-commit",
+      "severity": "low",
+      "path": "docs/slice-0.md",
+      "evidence": "pgque.receive auto-finishes an empty batch inside the caller's transaction (5380\u20135383), and it returns zero rows both when no batch is ready and when the batch was empty. The Section C dispatch flow only says 'require result=1 for a nonempty batch', and ADR-003 says 'sleep after empty polls'. The gate-failure path says to 'end the empty transaction' but does not say how. If an implementation rolls back on zero rows, the empty tick window is never finished. next_batch_custom (5807\u20135824) always picks the first tick after sub_last_tick, so the consumer stays on that empty window and later non-empty windows are never delivered. Idle-period ticks make empty windows common. S1-02 tests PgQue's auto-finish but not the dispatcher's commit behaviour.",
+      "fix": "State that a dispatch transaction that got the gate and received zero rows must COMMIT; a ROLLBACK is allowed only on error or when the gate was not obtained. Add a Slice 2 dispatcher test: an empty tick window followed by a non-empty one must deliver the later events and advance sub_last_tick."
+    },
+    {
+      "id": "S0R4-05-autovacuum-assumption-unasserted",
+      "severity": "low",
+      "path": "docs/slice-0.md",
+      "evidence": "Section B notes that 'maint() deliberately skips rotation step 2 and VACUUM'. pgque.maint_tables_to_vacuum (1007\u20131010) returns nothing when autovacuum is on, and maint() skips 'vacuum' entries regardless (5277\u20135278). ADR-003 schedules no VACUUM. Every 100 ms tick and every dispatch updates pgque.subscription, pgque.queue and pgque.tick, and every renewal updates pgHelm's shard rows. Their bloat control therefore depends entirely on autovacuum, which the plan never requires or checks. If a deployment disables autovacuum, nothing vacuums these hot tables.",
+      "fix": "Make autovacuum=on (and reasonable per-table autovacuum settings for shard and the PgQue hot tables, if needed) a startup assertion and an S1-09/S1-01 check. Alternatively, schedule explicit VACUUM of the tables returned by maint_tables_to_vacuum, outside any transaction, when autovacuum is off."
+    },
+    {
+      "id": "S0R4-06-multixact-cost-unmeasured",
+      "severity": "low",
+      "path": "docs/slice-0.md",
+      "evidence": "ADR-002 deliberately pairs dispatch's FK KEY SHARE on shard rows with workers' FOR NO KEY UPDATE and UPDATEs on the same rows: renewal every 5 s, plus every Start and Finish. When a dispatch transaction holds KEY SHARE on a shard row that a worker updates, or the reverse, PostgreSQL stores a MultiXact in xmax. A batch that touches most shards, combined with continuous renewals, makes this routine. Risk 4 and Slice 6/7 measure 'tables/indexes/TOAST, coordinator churn, identity growth, maintenance and WAL' but not MultiXact member growth, SLRU contention or multixact freeze age.",
+      "fix": "Add MultiXact metrics (pg_stat_slru for MultiXact, mxid_age(datminmxid/relminmxid) on shard) to the Slice 3 compatibility test and the Slice 6/7 measurements. Record as an ADR-002 alternative replacing the job\u2192shard FK with a CHECK on the fixed shard_id range, since shard rows are never deleted."
+    },
+    {
+      "id": "S0R4-07-round3-obligations-only-in-log",
+      "severity": "low",
+      "path": "docs/slice-0.md",
+      "evidence": "docs/review-log.md (lines 345\u2013349) accepts R3-N1, R3-N2 and R3-N3 as 'mandatory inputs to the Slice 2 plan':\n- R3-N1: key poison-batch detection on the tick window, not batch_id.\n- R3-N2: an explicit SQLSTATE allowlist.\n- R3-N3: read-only savepoints.\n\nThe log also says 'The reviewed plan file remains unchanged.' Section C of the plan still says 'after three consecutive same-batch failures', which R3-N1 says is wrong because each retry gets a new batch_id from nextval (5863). AGENTS.md line 5 tells implementers to 'Read docs/slice-0.md before project work' and does not mention these log-only obligations. An implementer who follows the plan alone will build a halt counter that never fires.",
+      "fix": "Fold R3-N1, R3-N2 and R3-N3 into the plan text (or a referenced Slice 2 obligations section) before user approval, then re-bind the review hash. Alternatively, have AGENTS.md and Section J explicitly require reading the review-log obligations."
+    },
+    {
+      "id": "S0R4-08-worktree-inventory-inaccurate",
+      "severity": "low",
+      "path": "docs/slice-0.md",
+      "evidence": "Sections A and E list only two worktrees: source-audit and Claude-QA at C:\\Users\\Khang\\pw\\pghelm-source-audit and C:\\Users\\Khang\\pw\\pghelm-claude-qa. The repository also has .git/worktrees/pghelm-spec-audit (gitdir C:/Users/Khang/pw/pghelm-spec-audit/.git, branch refs/heads/review/spec), and review-log.md line 30 says the spec agent used it. Section I's verification ('git worktree list') will show three worktrees, which does not match the documented setup inventory.",
+      "fix": "List the spec-audit worktree and its branch in Sections A and E, or remove it if it is no longer needed and record that."
+    }
+  ],
+  "coverage": [
+    "Read the whole of C:\\Users\\Khang\\pgHelm\\docs\\slice-0.md and compared it with the supplied plan: the text is identical. I did not recompute the SHA256 because I cannot run commands.",
+    "Read docs/review-log.md in full (setup, rounds 1\u20133, the R3 obligations, final verification), plus AGENTS.md and README.md.",
+    "Listed the repository files and .git/worktrees, which showed a third worktree (pghelm-spec-audit) and the review branches.",
+    "Pinned PgQue sql/pgque.sql read directly:\n- receive/ack/nack and their grants (5341\u20135477)\n- next_batch_custom override (5657\u20135882) and finish_batch (5884\u20135934)\n- next_batch(2) (2011\u20132034)\n- register_consumer/register_consumer_at (1753\u20131879)\n- batch_event_sql (311\u2013442)\n- ticker(text) and ticker() (694\u2013824)\n- external ticker (5127\u20135193)\n- rotate step1 tail and step2 (880\u2013988)\n- maint_tables_to_vacuum and maint_operations (990\u20131123)\n- start() pg_cron schedule (4234\u20134314)\n- role creation and grants (4699\u20134858)\n- maint() (5254\u20135311)\n- send overloads (6795\u20136834) and subscribe/unsubscribe (6964\u20136980)\n- tick table DDL (136\u2013143)",
+    "Grepped the installer for transaction control, psql meta-commands, CONCURRENTLY, VACUUM and CREATE EXTENSION outside function bodies: none found, apart from a COMMIT inside the ticker_loop procedure body.",
+    "Confirmed that sql/pgque-api/receive.sql (the plan's nack link target) exists in the pinned checkout."
+  ],
+  "limitations": [
+    "I could not run commands. I did not recompute the plan SHA256, the canonical or CRLF installer hashes, or the image digest; I did not run Section I; and I did not query GitHub or Docker.",
+    "S0R4-01 (inverted tick snapshots and duplicate delivery from concurrent tickers) and the MultiXact behaviour in S0R4-06 come from reading the source and PostgreSQL semantics. Neither was run against PG17.",
+    "I did not open the coordinator's raw evidence files under C:\\Users\\Khang\\tmp (probe JSON, result.json files), the QA, spec-audit or source-audit worktree contents, or the external web sources.",
+    "I did not re-review the cooperative-consumer code, DLQ replay or maint_retry_events internals beyond confirming the plan excludes them from v1.",
+    "No application code, schema or tests exist, so this is a design and spec-fidelity review only. No test results are claimed."
+  ]
+}
+```
+
+Dispositions: 01 accepted scheduler transaction gate and replica tests; 02/03 accepted as mandatory Slice 2/4 protocol clarifications without implementing those slices; 04 accepted explicit empty-receive commit rule; 05 accepted autovacuum prerequisite; 06 accepted measurement requirement, retain FK until separately approved; 07 folded log-only obligations into plan; 08 corrected worktree inventory. Scheduler-inversion mechanism remains source-derived, not reproduced. All current plan clarifications are appended to docs/slice-0.md.
+
+
+## Slice 1 plan transfer review, round 2
+
+Raw result: `C:\Users\Khang\tmp\pghelm-slice1-plan-review-2\claudex-vg0wg1o1\result.json`. Verdict REVISE. All prior eight plan findings closed. Full response:
+
+```json
+{
+  "verdict": "REVISE",
+  "summary": "At plan level, all eight round-4 findings are closed by the \"Review clarifications accepted during Slice 1 preparation\" section. AGENTS.md now points implementers to that section and to the review log.\n- **S0R4-01 (concurrent tickers):** closed. Every scheduler operation now takes a per-operation try-lock on (1346848837,3) in a separate statement. src/ticker.ts:9-15 implements it, and lifecycle.test.ts covers the lock loser and two scheduler loops running together.\n- **S0R4-05 (autovacuum):** closed. runTicker refuses to start unless autovacuum=on (src/ticker.ts:24-25).\n- **S0R4-02, -03 and -04 (replay and source binding, ambiguous Start, empty-receive commit) and R3-N1..N3:** correctly recorded as Slice 2 and Slice 4 obligations. The Slice 1 smoke receive path already commits when receive returns zero rows.\n- **S0R4-06 (MultiXact):** accepted as a measurement obligation, with the FK kept for now.\n- **S0R4-07 (round-3 obligations only in the log):** closed through the clarifications section and the updated AGENTS.md.\n- **S0R4-08 (worktree inventory):** closed by the clarification that lists all three worktrees.\n\nI did not relitigate any of these.\n\nI also traced the Slice 1 code now in the working tree (src/, tests/) against the plan's Slice 1 obligations. One material defect remains: the `migrate` CLI command silently re-subscribes a missing consumer at every run, which contradicts the plan's missing-consumer rule. Lower-severity issues:\n- Smoke ticks the queue outside the new scheduler lock.\n- The default lock_timeout turns competing migrations into failures rather than serialized runs.\n- Sections J and the scope line still describe pre-authorization status.",
+  "findings": [
+    {
+      "id": "S0R5-01-migrate-silently-recreates-consumer",
+      "severity": "medium",
+      "path": "src/cli.ts",
+      "evidence": "src/cli.ts:19-25 makes `migrate` (the planned routine `pnpm db:migrate` step) always run `pgque.create_queue($1)` and then `pgque.subscribe($1,$2)` in a committed transaction. The code comment says 'normal startup must never recreate a lost cursor', but migrate runs on every deploy, and Slice 2+ will add migrations.\n\nIn the pinned SQL:\n- create_queue returns 0 when the queue already exists (1430\u20131431).\n- subscribe \u2192 register_consumer \u2192 register_consumer_at inserts a new subscription at the latest existing tick when none exists (1860\u20131876).\n\nIf the expected consumer was ever unregistered or lost, the next `migrate` silently recreates it at the current tick and skips every retained, un-dispatched event. The ticker's requireConsumer check then passes. This contradicts Section B ('treat accidental missing consumer as a startup error'), the Section G 'Consumer missing/recreated' row, the 'Critical handoff assessment' ('unsafe if \u2026 an unknown consumer is silently recreated') and S1-07. lifecycle.test.ts only tests requireConsumer and smoke, not the migrate path.",
+      "fix": "Separate provisioning from migration: add an explicit `provision` command, or make migrate subscribe only when create_queue returned 1 (the queue was created in this same transaction). If the queue exists but the expected consumer is missing, fail with an operator-action error; recreating must require an explicit flag and be logged. Add an S1-07 test: provision, unsubscribe, rerun migrate, and assert that it fails and that get_consumer_info stays empty."
+    },
+    {
+      "id": "S0R5-02-smoke-ticks-outside-scheduler-lock",
+      "severity": "low",
+      "path": "src/smoke.ts",
+      "evidence": "The clarification requires that 'Scheduler replicas serialize every ticker/maintenance/retry/rotation-step2 call' and that 'No uncoordinated \u2026 external ticker may run alongside this scheduler'. src/smoke.ts:16 still calls `pgque.force_next_tick($1)` directly on the pool, outside schedulerCall's (1346848837,3) lock. force_next_tick inserts a tick through force_tick and ticker (pgque.sql 4688\u20134690). Running `pnpm smoke` against a dev database where `cli ticker` is active therefore produces exactly the uncoordinated concurrent ticking the new lock is meant to exclude. lifecycle.test.ts:39/71 does the same, but there it is test setup.",
+      "fix": "Run force_next_tick through schedulerCall (or under the same separate-statement lock in its own transaction). Alternatively, state that smoke must not run while a scheduler is active, and enforce that by taking the lock."
+    },
+    {
+      "id": "S0R5-03-migration-lock-timeout-not-serialize",
+      "severity": "low",
+      "path": "src/migrate.ts",
+      "evidence": "S1-01 requires that 'competing migration starts serialize'. src/migrate.ts:33 uses a blocking `pg_advisory_xact_lock(1346848837, 1)`, but createPool (src/db.ts:10-18) sets session `lock_timeout=1000` by default, and the CLI uses that default. lock_timeout covers heavyweight-lock waits, including advisory locks. A second `migrate` started while the first is applying the multi-thousand-line PgQue installer (or any migration longer than 1 s) therefore fails with SQLSTATE 55P03 instead of waiting. The competing-migration test (migrations.test.ts:96-130) also depends on both waits finishing within 1 s, so it is timing-sensitive.",
+      "fix": "In the migration transaction, `SET LOCAL lock_timeout` to a migration-specific bound (or 0, with an outer deadline) before taking the advisory lock. Alternatively, document that a competitor fails fast and change the S1-01 wording. Add a case where the lock holder exceeds the default lock_timeout."
+    },
+    {
+      "id": "S0R5-04-stale-status-sections",
+      "severity": "low",
+      "path": "docs/slice-0.md",
+      "evidence": "Line 3 says 'Slice 1 authorized', and AGENTS.md line 3 agrees. Line 4 still says 'No application, migrations, project containers \u2026 have been created', and Section J (line 332) still says 'Blocked: moving to Slice 1 awaits explicit user architectural approval'. Section E (line 202) still lists two worktrees, although the clarification lists three. The working tree now contains src/, migrations/, tests/, vendor/ and infra/. Someone reading Section J will get the wrong authorization state.",
+      "fix": "Change line 4 and Section J to match the authorized Slice 1 state, or label them explicitly as the historical Slice 0 snapshot superseded by the header and clarifications. Align the Section E worktree list."
+    }
+  ],
+  "coverage": [
+    "Compared the supplied revision with C:\\Users\\Khang\\pgHelm\\docs\\slice-0.md by grepping the changed header, Section J, Section E and the clarifications section. I did not recompute the SHA256.",
+    "Checked each of S0R4-01..08 against the new clarifications section, and read the updated AGENTS.md.",
+    "Traced the Slice 1 implementation in the working tree:\n- src/ticker.ts: scheduler lock, autovacuum check, requireConsumer\n- src/migrate.ts: vendor hash and ledger checks, migration lock\n- src/db.ts: pool timeouts, transaction helper\n- src/config.ts\n- src/cli.ts: migrate bootstrap\n- src/smoke.ts: receive/ack and empty-result commit",
+    "Read tests/integration/lifecycle.test.ts in full, and migrations.test.ts lines 90\u2013131 (the competing-migration test). Grepped the tests for lock keys, pools and concurrency.",
+    "Pinned pgque.sql re-checked:\n- create_queue return values (1422\u20131440)\n- register_consumer_at new-registration path (1860\u20131876)\n- force_next_tick (4688\u20134690)\n- ticker(text) has no queue-row lock (694\u2013796)",
+    "Earlier rounds' verification of the pinned PgQue source (receive/ack/next_batch/finish_batch, grants, maintenance) still applies and was not repeated."
+  ],
+  "limitations": [
+    "I could not run commands or tests. Nothing here claims the Slice 1 tests pass, and the lock_timeout behaviour in S0R5-03 is inferred from PostgreSQL semantics and the code, not observed.",
+    "The Slice 1 code appears to be an uncommitted build in progress. I reviewed the working tree as it was when read, and it may change.",
+    "I did not read tests/integration/pgque.test.ts in full, the unit tests, migrations/0001-version.sql, vendor/pgque/SHA256SUMS bytes, infra/compose.yaml, .github/workflows/ci.yml, or package.json/lockfile versions. I did not open docs/slice-1.md because it is not present.",
+    "The Slice 2/4 obligations (replay classification, source binding, ambiguous Start, SQLSTATE allowlist) are design commitments only. No schema exists to check them against."
+  ]
+}
+```
+
+Dispositions: S0R5-01 accepted and reproduced with the actual CLI: the test incorrectly resolved successfully after unsubscribe; subscribe now runs only on newly created queue and existing missing consumer fails. S0R5-02 rejected on pinned-source evidence: force_next_tick delegates to force_tick; final override lines5197-5233 only reads queue, advances event sequence with nextval/setval, and returns existing last tick. It never calls ticker or inserts tick. Added actual no-tick-insert characterization. S0R5-03 accepted; delayed lock-holder test reproduced55P03, migration/bootstrap now set local15s lock/30s statement bounds. S0R5-04 accepted historical labeling and authorization correction. Codex QA also reproduced payload text in JSON.parse error; fixed generic error with batch replay regression.
+
+
+## Slice 1 plan transfer review, round 3
+
+Raw result: `C:\Users\Khang\tmp\pghelm-slice1-plan-review-3\claudex-rnemoxnd\result.json`. Verdict APPROVED, observed model claude-opus-5-5, same review session `f6eb8e9d-5ba0-44bd-870c-cc49a69b5ebf`. Plan SHA256 `8972fa9d6eb5e980d924e141ba8d202ea9f4838f7c984b3ec442339ff566b4ca`. Runner check printed `Approval matches the current plan.` Full response:
+
+```json
+{
+  "verdict": "APPROVED",
+  "summary": "The round-5 dispositions hold, and I found no remaining material defect in the plan or in the traced Slice 1 bootstrap and migration paths.\n- **S0R5-01 (migrate silently re-subscribes):** closed. src/cli.ts:22-33 now runs bootstrap in its own transaction under the migration advisory lock (1346848837,1), with SET LOCAL lock_timeout 15s and statement_timeout 30s. It subscribes only when `pgque.create_queue` returns 1; per pinned pgque.sql 1430\u20131431, 1 means the queue was created and 0 means it already existed. An existing queue without the expected consumer now throws instead of recreating the cursor. That matches the new clarification and the Section B, Section G and S1-07 missing-consumer rule.\n- **S0R5-02 (smoke ticks outside the scheduler lock):** the rejection is correct. The final pinned `pgque.force_tick` override (5197\u20135238) only validates the queue, bumps `queue_event_seq` with nextval/setval and returns the existing last tick ID. It inserts no tick and does not call ticker(). force_next_tick only delegates to it (4688\u20134690). My earlier finding relied on the superseded description in create_queue's header comment, so it is withdrawn.\n- **S0R5-03 (migration lock timeout):** closed. src/migrate.ts:31-35 sets transaction-local 15s/30s bounds before the advisory lock, so competing migrations wait up to the documented bound and otherwise fail safely. The clarification records this.\n- **S0R5-04 (stale status sections):** closed. The scope line and Section J are now labelled as the historical Slice 0 snapshot. The authorization state matches AGENTS.md.\n\nThe S0R4 and R3 obligations stay as previously recorded later-slice design obligations; I did not relitigate them. Only Slice 1 is authorized. This approval covers the plan and the traced code paths. It is not runtime evidence, and Slice 1 exit still requires the observed S1-01..S1-10 results.",
+  "findings": [],
+  "coverage": [
+    "Checked the revised plan's changed text (status header, historical-scope labelling, Section J, and the new CLI bootstrap/migration-timeout clarification) against the round-5 findings. I did not recompute the SHA256.",
+    "Read src/cli.ts and src/migrate.ts in full as they are now in the working tree.",
+    "Re-read the final pinned pgque.sql force_tick override (5194\u20135239) to test the S0R5-02 rejection, and re-used the earlier reads of force_next_tick delegation (4688\u20134690), create_queue return values (1422\u20131440) and register_consumer_at (1782\u20131879).",
+    "Earlier rounds' review of src/ticker.ts (scheduler lock, autovacuum check), src/db.ts, src/smoke.ts (commit on zero rows), AGENTS.md and lifecycle.test.ts still applies; those files were not reported as changed in this round."
+  ],
+  "limitations": [
+    "I could not run commands or tests. The host's reported CLI regression and lock-barrier reproductions are not independently observed, and no test-pass claim is made.",
+    "I did not re-read the updated test files (lifecycle.test.ts and migrations.test.ts) or docs/review-log.md for this round's additions. The host says a separate fresh final code inspection will follow.",
+    "Minor non-blocking observation: config.ts accepts queue names up to 63 characters, while pinned create_queue rejects names over 57 bytes. This fails loudly at bootstrap rather than silently.",
+    "Later-slice obligations (replay classification, source binding, ambiguous Start, SQLSTATE allowlist, MultiXact measurement) are design commitments only. No schema exists to verify them yet."
+  ]
+}
+```
+
+The low queue-name ceiling observation was reproduced with a failing unit regression and fixed to57 ASCII bytes. Independent Codex QA closed its payload-log finding by inspection after the fixed error/replay test, and reported no remaining findings. Codex QA did not execute the application suite; primary and implementation lanes own the runtime evidence. Fresh Claude code inspection remains required.

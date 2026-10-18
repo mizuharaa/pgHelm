@@ -13,7 +13,7 @@ export function validateLocalDatabaseUrl(value: string): string {
 export function readConfig(env: NodeJS.ProcessEnv = process.env) {
   const parsed = z.object({
     DATABASE_URL: z.string().min(1),
-    QUEUE_NAME: z.string().regex(/^[a-z][a-z0-9_]{0,62}$/).default('pghelm_demo'),
+    QUEUE_NAME: z.string().regex(/^[a-z][a-z0-9_]{0,56}$/).default('pghelm_demo'),
     CONSUMER_NAME: z.string().regex(/^[a-z][a-z0-9_]{0,62}$/).default('pghelm_demo_consumer'),
     POOL_MAX: z.coerce.number().int().min(1).max(16).default(4),
   }).safeParse(env);

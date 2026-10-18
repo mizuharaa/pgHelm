@@ -6,5 +6,8 @@ BEGIN
   IF pgque.version() <> '0.2.2' THEN
     RAISE EXCEPTION 'pgHelm requires pinned PgQue 0.2.2';
   END IF;
+  IF current_setting('autovacuum') <> 'on' THEN
+    RAISE EXCEPTION 'pgHelm requires autovacuum=on';
+  END IF;
 END;
 $$;

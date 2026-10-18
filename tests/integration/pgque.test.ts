@@ -5,7 +5,7 @@ import { Client, Pool, type PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { migrate } from '../../src/migrate.js';
 
-const image = 'postgres:17-bookworm@sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b038826';
+const image = 'postgres:17-bookworm@sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826';
 type Database = Pool | PoolClient | Client;
 type Message = { msg_id: string; batch_id: string; payload: string; type: string };
 type Position = { last_tick: string; current_batch: string | null; next_tick: string | null };
@@ -338,10 +338,10 @@ describe.sequential('pinned PgQue transaction contract (real PostgreSQL 17)', ()
     await ack(messages, pool);
   });
 
-  it.each(['COMMIT', 'ROLLBACK'] as const)('S1-08 second normal consumer waits for first transaction %s', async (ending) => {
+  it.each(['COMMIT', 'ROLLBACK'] as const)('S1-08 characterizes bare receive after concurrent %s, then recovers safely', async (ending) => {
     const q = await queue();
     const id = await send(q, 'contended');
-    await tick(q);
+    const tickId = await tick(q);
     const first = await pool.connect();
     const second = await pool.connect();
     try {
@@ -360,17 +360,73 @@ describe.sequential('pinned PgQue transaction contract (real PostgreSQL 17)', ()
       await waitForBlock(secondPid, firstPid);
       await first.query(ending);
       const result = await pending;
-      expect(result.error).toBeUndefined();
-      const messages = result.messages!;
       if (ending === 'COMMIT') {
-        expect(messages).toEqual([]);
+        // Pinned v0.2.2 returns P0001 after this joined subscription/tick lock wait.
+        expect(result.error).toMatchObject({
+          code: 'P0001',
+          message: `PgQ corruption: Consumer ${q.consumer} on queue ${q.name} does not see tick <NULL>`,
+        });
+        expect(result.messages).toBeUndefined();
+        await expect(second.query('SELECT 1')).rejects.toMatchObject({ code: '25P02' });
+        await second.query('ROLLBACK');
+        expect(await sink(q)).toEqual([id]);
+        expect(await position(q)).toEqual({ last_tick: tickId, current_batch: null, next_tick: null });
+        await second.query('BEGIN');
+        expect(await receive(q, second)).toEqual([]);
       } else {
+        expect(result.error).toBeUndefined();
+        const messages = result.messages!;
         expect(messages.map((message) => message.msg_id)).toEqual([id]);
         await stage(q, messages, second);
         await ack(messages, second);
       }
       await second.query('COMMIT');
       expect(await sink(q)).toEqual([id]);
+      expect(await position(q)).toEqual({ last_tick: tickId, current_batch: null, next_tick: null });
+      expect(await receive(q)).toEqual([]);
+    } finally {
+      await first.query('ROLLBACK');
+      await second.query('ROLLBACK');
+      first.release();
+      second.release();
+    }
+  });
+
+  it.each(['COMMIT', 'ROLLBACK'] as const)('S1-08 separate advisory gate rejects the contender before receive; owner %s releases it', async (ending) => {
+    const q = await queue();
+    const id = await send(q, 'gated handoff');
+    const tickId = await tick(q);
+    const first = await pool.connect();
+    const second = await pool.connect();
+    const gate = 'SELECT pg_try_advisory_xact_lock(1346848837, 2) AS acquired';
+    try {
+      await first.query('BEGIN');
+      expect((await first.query<{ acquired: boolean }>(gate)).rows[0]!.acquired).toBe(true);
+      const messages = await receive(q, first);
+      expect(messages.map((message) => message.msg_id)).toEqual([id]);
+      await stage(q, messages, first);
+      await ack(messages, first);
+
+      await second.query('BEGIN');
+      expect((await second.query<{ acquired: boolean }>(gate)).rows[0]!.acquired).toBe(false);
+      // Losing transactions end without calling receive, so they never enter PgQue's lock-wait join.
+      await second.query('ROLLBACK');
+      await first.query(ending);
+
+      await second.query('BEGIN');
+      expect((await second.query<{ acquired: boolean }>(gate)).rows[0]!.acquired).toBe(true);
+      // A new SQL statement obtains a fresh READ COMMITTED snapshot after gate acquisition.
+      const replay = await receive(q, second);
+      if (ending === 'COMMIT') {
+        expect(replay).toEqual([]);
+      } else {
+        expect(replay.map((message) => message.msg_id)).toEqual([id]);
+        await stage(q, replay, second);
+        await ack(replay, second);
+      }
+      await second.query('COMMIT');
+      expect(await sink(q)).toEqual([id]);
+      expect(await position(q)).toEqual({ last_tick: tickId, current_batch: null, next_tick: null });
       expect(await receive(q)).toEqual([]);
     } finally {
       await first.query('ROLLBACK');
